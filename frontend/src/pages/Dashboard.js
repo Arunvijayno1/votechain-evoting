@@ -2,141 +2,205 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { useAuth } from '../context/AuthContext';
-import { getAdminStats, getElections, getMyVotes, getVoterProfile } from '../services/api';
+import { getAdminStats, getElections, getMyVotes, getVoterProfile, getResults } from '../services/api';
+
+function Countdown({ endTime }) {
+  const [timeLeft, setTimeLeft] = useState('');
+  useEffect(() => {
+    const calc = () => {
+      const diff = new Date(endTime) - new Date();
+      if (diff <= 0) { setTimeLeft('Ended'); return; }
+      const d = Math.floor(diff / 86400000);
+      const h = Math.floor((diff % 86400000) / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setTimeLeft(d > 0 ? `${d}d ${h}h ${m}m` : `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`);
+    };
+    calc();
+    const t = setInterval(calc, 1000);
+    return () => clearInterval(t);
+  }, [endTime]);
+  return <span style={{ fontFamily: 'monospace', color: 'var(--gold)' }}>{timeLeft}</span>;
+}
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user }  = useAuth();
   const [stats,     setStats]     = useState(null);
   const [elections, setElections] = useState([]);
   const [myVotes,   setMyVotes]   = useState([]);
   const [voterInfo, setVoterInfo] = useState(null);
+  const [liveResults, setLiveResults] = useState({});
   const [loading,   setLoading]   = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
         const [elecRes] = await Promise.all([getElections()]);
-        setElections(elecRes.data.elections || []);
+        const elecs = elecRes.data.elections || [];
+        setElections(elecs);
 
         if (user.role === 'admin') {
           const s = await getAdminStats();
           setStats(s.data.stats);
+          // Load results for each election
+          const res = {};
+          await Promise.all(elecs.map(async e => {
+            try { const r = await getResults(e._id); res[e._id] = r.data; } catch {}
+          }));
+          setLiveResults(res);
         }
         if (user.role === 'voter') {
           const [vr, mv] = await Promise.all([getVoterProfile(), getMyVotes()]);
           setVoterInfo(vr.data.voter);
           setMyVotes(mv.data.votes || []);
         }
-      } catch (err) {
-        toast.error('Failed to load dashboard');
-      } finally {
-        setLoading(false);
-      }
+      } catch { toast.error('Failed to load dashboard'); }
+      finally { setLoading(false); }
     })();
   }, [user.role]);
 
-  if (loading) return <div className="loading-screen">Loading dashboard…</div>;
+  if (loading) return <div className="loading-screen">Loading dashboard</div>;
 
-  const activeElections = elections.filter(e => e.status === 'active');
+  const active  = elections.filter(e => e.status === 'active');
+  const closed  = elections.filter(e => e.status === 'closed');
+  const COLORS  = ['var(--gold)', 'var(--green)', 'var(--amber)', 'var(--purple)', 'var(--red)'];
 
   return (
-    <div>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
-          Welcome back, {user.name} 👋
-        </h2>
-        <div style={{ color: 'var(--text3)', fontSize: 12 }}>
-          Role: <span className={`badge badge-${user.role === 'admin' ? 'red' : user.role === 'candidate' ? 'purple' : 'blue'}`}>{user.role}</span>
+    <div className="fade-in">
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>
+          Welcome back, <span style={{ color: 'var(--gold2)' }}>{user.name}</span>
         </div>
+        <div style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>
       </div>
 
-      {/* ── Admin Stats ─────────────────────────── */}
+      {/* ── Admin ── */}
       {user.role === 'admin' && stats && (
         <>
-          <div className="grid-4" style={{ marginBottom: 20 }}>
-            <div className="stat stat-blue">
-              <div className="stat-label">Active Elections</div>
-              <div className="stat-value">{activeElections.length}</div>
-              <div className="stat-sub">Total: {stats.totalElections}</div>
+          <div className="grid-4" style={{ marginBottom: 24 }}>
+            <div className="stat stat-gold"><div className="stat-label">Active Elections</div><div className="stat-value">{active.length}</div><div className="stat-sub">Total: {stats.totalElections}</div></div>
+            <div className="stat stat-green"><div className="stat-label">Total Votes</div><div className="stat-value">{stats.totalVotes.toLocaleString()}</div><div className="stat-sub">Blockchain verified</div></div>
+            <div className="stat"><div className="stat-label">Registered Voters</div><div className="stat-value">{stats.totalVoters}</div><div className="stat-sub">Face verified accounts</div></div>
+            <div className="stat"><div className="stat-label">Blockchain Blocks</div><div className="stat-value" style={{color:'var(--gold)'}}>{stats.blockchain?.totalBlocks}</div><div className="stat-sub" style={{color: stats.blockchain?.isValid ? 'var(--green)' : 'var(--red)'}}>{stats.blockchain?.isValid ? '✓ Chain Valid' : '⚠ Tampered!'}</div></div>
+          </div>
+
+          {stats.pendingCandidates > 0 && (
+            <div style={{ background: 'var(--amber-bg)', border: '1px solid var(--amber)', borderRadius: 10, padding: '12px 18px', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: 'var(--amber)', fontSize: 13 }}>⚠ {stats.pendingCandidates} candidate(s) pending approval</span>
+              <Link to="/admin/candidates" className="btn btn-sm" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}>Review →</Link>
             </div>
-            <div className="stat stat-green">
-              <div className="stat-label">Total Votes</div>
-              <div className="stat-value">{stats.totalVotes.toLocaleString()}</div>
-              <div className="stat-sub">Blockchain verified</div>
+          )}
+
+          {/* Live results for all elections */}
+          {elections.map(e => {
+            const res = liveResults[e._id];
+            if (!res || !res.results?.length) return null;
+            const total = res.totalVotes || 0;
+            return (
+              <div key={e._id} className="card" style={{ marginBottom: 16 }}>
+                <div className="card-header">
+                  <div className="card-title">
+                    ◉ {e.title}
+                    <span className={`badge ${e.status === 'active' ? 'badge-green' : 'badge-amber'}`} style={{ marginLeft: 8 }}>{e.status.toUpperCase()}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>{total} votes</span>
+                    {e.status === 'active' && <span style={{ fontSize: 11, color: 'var(--text2)' }}>Ends: <Countdown endTime={e.endTime} /></span>}
+                    <Link to={`/results/${e._id}`} className="btn btn-sm">Full Results →</Link>
+                  </div>
+                </div>
+                {res.results.slice(0,4).map((r, i) => (
+                  <div key={r.candidateId} className="vote-bar-wrap">
+                    <div className="vote-bar-label">
+                      <span style={{ fontWeight: 600 }}>{i === 0 && e.status === 'closed' ? '🏆 ' : ''}{r.name} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>— {r.party}</span></span>
+                      <span style={{ color: COLORS[i % COLORS.length], fontWeight: 700 }}>{r.voteCount} ({r.percentage}%)</span>
+                    </div>
+                    <div className="vote-bar-bg"><div className="vote-bar-fill" style={{ width: `${r.percentage}%`, background: COLORS[i % COLORS.length] }} /></div>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* ── Voter ── */}
+      {user.role === 'voter' && (
+        <>
+          <div className="grid-3" style={{ marginBottom: 24 }}>
+            <div className="stat stat-green"><div className="stat-label">Face Status</div><div className="stat-value" style={{ fontSize: 20 }}>{voterInfo?.faceRegistered ? 'Registered ✓' : 'Not Registered'}</div><div className="stat-sub">{voterInfo?.faceRegistered ? 'Ready to vote' : 'Complete face setup first'}</div></div>
+            <div className="stat stat-gold"><div className="stat-label">Votes Cast</div><div className="stat-value">{myVotes.length}</div><div className="stat-sub">Elections participated</div></div>
+            <div className="stat"><div className="stat-label">Active Elections</div><div className="stat-value">{active.length}</div><div className="stat-sub">Open for voting</div></div>
+          </div>
+
+          {!voterInfo?.faceRegistered && (
+            <div style={{ background: 'var(--red-bg)', border: '1px solid var(--red)', borderRadius: 10, padding: '14px 18px', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ color: 'var(--red)', fontWeight: 700, marginBottom: 2 }}>Face Registration Required</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>You must register your face before you can cast a vote.</div>
+              </div>
+              <Link to="/face-register" className="btn btn-gold">Register Face →</Link>
             </div>
-            <div className="stat stat-amber">
-              <div className="stat-label">Voters</div>
-              <div className="stat-value">{stats.totalVoters}</div>
-              <div className="stat-sub">Registered</div>
-            </div>
-            <div className="stat stat-purple">
-              <div className="stat-label">Blockchain</div>
-              <div className="stat-value">{stats.blockchain.totalBlocks}</div>
-              <div className="stat-sub">
-                {stats.blockchain.isValid
-                  ? <span style={{ color: 'var(--green)' }}>✓ Valid</span>
-                  : <span style={{ color: 'var(--red)' }}>⚠ Invalid</span>}
+          )}
+
+          {active.map(e => (
+            <div key={e._id} className="card-gold" style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)', marginBottom: 4 }}>{e.title}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>Closes in: <Countdown endTime={e.endTime} /></div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {myVotes.some(v => v.electionId?._id === e._id || v.electionId === e._id)
+                    ? <span className="badge badge-green">✓ Voted</span>
+                    : <Link to="/vote" className="btn btn-gold">Vote Now →</Link>
+                  }
+                  <Link to={`/results/${e._id}`} className="btn btn-sm">Results</Link>
+                </div>
               </div>
             </div>
-          </div>
-          {stats.pendingCandidates > 0 && (
-            <div style={{ background: 'rgba(210,153,34,.1)', border: '1px solid var(--amber)', borderRadius: 8, padding: '10px 16px', marginBottom: 16, fontSize: 12, color: 'var(--amber)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>⚠ {stats.pendingCandidates} candidate(s) awaiting approval</span>
-              <Link to="/admin/candidates" className="btn btn-sm" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}>Review</Link>
+          ))}
+
+          {closed.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div className="section-title" style={{ fontSize: 14, marginBottom: 14 }}>Completed Elections</div>
+              {closed.map(e => (
+                <div key={e._id} className="card" style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontWeight: 600 }}>{e.title}</div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span className="badge badge-amber">Closed</span>
+                      <Link to={`/results/${e._id}`} className="btn btn-sm">View Results →</Link>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </>
       )}
 
-      {/* ── Voter Stats ─────────────────────────── */}
-      {user.role === 'voter' && (
-        <div className="grid-3" style={{ marginBottom: 20 }}>
-          <div className="stat stat-green">
-            <div className="stat-label">Face Verified</div>
-            <div className="stat-value">{voterInfo?.faceRegistered ? '✓' : '✗'}</div>
-            <div className="stat-sub">{voterInfo?.faceRegistered ? 'Ready to vote' : 'Register face first'}</div>
+      {/* ── Candidate ── */}
+      {user.role === 'candidate' && (
+        <>
+          <div className="grid-3" style={{ marginBottom: 24 }}>
+            <div className="stat stat-gold"><div className="stat-label">Active Elections</div><div className="stat-value">{active.length}</div></div>
+            <div className="stat stat-green"><div className="stat-label">Closed Elections</div><div className="stat-value">{closed.length}</div></div>
+            <div className="stat"><div className="stat-label">Total Elections</div><div className="stat-value">{elections.length}</div></div>
           </div>
-          <div className="stat stat-blue">
-            <div className="stat-label">Votes Cast</div>
-            <div className="stat-value">{myVotes.length}</div>
-            <div className="stat-sub">This cycle</div>
-          </div>
-          <div className="stat stat-amber">
-            <div className="stat-label">Active Elections</div>
-            <div className="stat-value">{activeElections.length}</div>
-            <div className="stat-sub">Open for voting</div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Active Elections ─────────────────────── */}
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">🗳 Active Elections</div>
-          <Link to="/elections" className="btn btn-sm">View All</Link>
-        </div>
-        {activeElections.length === 0 ? (
-          <div className="empty-state"><div className="icon">🗳</div><div>No active elections</div></div>
-        ) : (
-          activeElections.map(e => (
-            <div key={e._id} style={{ background: 'var(--bg3)', borderRadius: 8, padding: 14, marginBottom: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div style={{ fontWeight: 700, fontSize: 13 }}>{e.title}</div>
-                <span className="badge badge-green">● LIVE</span>
+          {active.map(e => (
+            <div key={e._id} className="card-gold" style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>{e.title}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Closes: <Countdown endTime={e.endTime} /></div>
+                </div>
+                <Link to={`/results/${e._id}`} className="btn btn-gold">Live Results →</Link>
               </div>
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10 }}>
-                Ends: {new Date(e.endTime).toLocaleDateString()}
-              </div>
-              {user.role === 'voter' && (
-                <Link to="/vote" className="btn btn-sm btn-primary">Cast Vote →</Link>
-              )}
-              {user.role === 'admin' && (
-                <Link to={`/results/${e._id}`} className="btn btn-sm">View Results</Link>
-              )}
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }

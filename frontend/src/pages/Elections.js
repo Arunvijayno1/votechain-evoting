@@ -1,64 +1,67 @@
-// ── Elections.js ─────────────────────────────────────────
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import { getElections, createElection } from '../services/api';
+import { getElections, createElection, updateElectionStatus } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
-export function Elections() {
-  const { user } = useAuth();
-  const [elections, setElections] = useState([]);
-  const [showForm,  setShowForm]  = useState(false);
-  const [form,      setForm]      = useState({ title: '', startTime: '', endTime: '' });
+export default function Elections() {
+  const { user }  = useAuth();
+  const [elections, setElecs]  = useState([]);
+  const [showForm,  setForm]   = useState(false);
+  const [form,      setF]      = useState({ title:'', startTime:'', endTime:'' });
+  const [loading,   setLoading] = useState(false);
 
-  useEffect(() => {
-    getElections().then(r => setElections(r.data.elections || [])).catch(() => toast.error('Failed to load elections'));
-  }, []);
+  const load = () => getElections().then(r => setElecs(r.data.elections || [])).catch(() => toast.error('Failed to load'));
+  useEffect(() => { load(); }, []);
 
   const handleCreate = async (e) => {
     e.preventDefault();
+    setLoading(true);
     try {
-      await createElection(form);
+      await createElection({ ...form, status: 'active' });
       toast.success('Election created!');
-      setShowForm(false);
-      getElections().then(r => setElections(r.data.elections || []));
-    } catch (err) { toast.error(err.response?.data?.message || 'Failed to create election'); }
+      setForm(false); setF({ title:'', startTime:'', endTime:'' }); load();
+    } catch (err) { toast.error(err.response?.data?.message || 'Failed'); }
+    finally { setLoading(false); }
   };
 
-  const statusColor = { active: 'badge-green', closed: 'badge-blue', draft: 'badge-amber' };
+  const handleClose = async (id) => {
+    if (!window.confirm('Close this election? This cannot be undone.')) return;
+    try { await updateElectionStatus(id, 'closed'); toast.success('Election closed'); load(); }
+    catch { toast.error('Failed'); }
+  };
+
+  const statusColor = { active: 'badge-green', closed: 'badge-amber', draft: 'badge-gold' };
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 700 }}>Elections</h2>
-        {user.role === 'admin' && (
-          <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>+ Create Election</button>
-        )}
+    <div className="fade-in">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div className="section-title" style={{ margin: 0 }}>Elections</div>
+        {user.role === 'admin' && <button className="btn btn-gold" onClick={() => setForm(!showForm)}>+ Create Election</button>}
       </div>
 
       {showForm && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <div className="card-title" style={{ marginBottom: 14 }}>New Election</div>
+        <div className="card-gold" style={{ marginBottom: 20 }}>
+          <div className="card-title" style={{ marginBottom: 16 }}>New Election</div>
           <form onSubmit={handleCreate}>
-            <div className="grid-3">
+            <div className="form-group">
+              <label className="form-label">Election Title</label>
+              <input className="form-input" required value={form.title} onChange={e => setF({...form, title: e.target.value})} placeholder="e.g. General Election 2025" />
+            </div>
+            <div className="grid-2">
               <div className="form-group">
-                <label className="form-label">Title</label>
-                <input className="form-input" required value={form.title}
-                  onChange={e => setForm({ ...form, title: e.target.value })} />
+                <label className="form-label">Start Date & Time</label>
+                <input className="form-input" type="datetime-local" required value={form.startTime} onChange={e => setF({...form, startTime: e.target.value})} />
               </div>
               <div className="form-group">
-                <label className="form-label">Start Time</label>
-                <input className="form-input" type="datetime-local" required value={form.startTime}
-                  onChange={e => setForm({ ...form, startTime: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">End Time</label>
-                <input className="form-input" type="datetime-local" required value={form.endTime}
-                  onChange={e => setForm({ ...form, endTime: e.target.value })} />
+                <label className="form-label">End Date & Time</label>
+                <input className="form-input" type="datetime-local" required value={form.endTime} onChange={e => setF({...form, endTime: e.target.value})} />
               </div>
             </div>
-            <button className="btn btn-primary btn-sm" type="submit">Create</button>
-            <button className="btn btn-sm" style={{ marginLeft: 8 }} type="button" onClick={() => setShowForm(false)}>Cancel</button>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-gold" type="submit" disabled={loading}>{loading ? 'Creating...' : 'Create Election'}</button>
+              <button className="btn" type="button" onClick={() => setForm(false)}>Cancel</button>
+            </div>
           </form>
         </div>
       )}
@@ -71,18 +74,18 @@ export function Elections() {
               {elections.map(e => (
                 <tr key={e._id}>
                   <td><b>{e.title}</b></td>
-                  <td>{new Date(e.startTime).toLocaleDateString()}</td>
-                  <td>{new Date(e.endTime).toLocaleDateString()}</td>
-                  <td><span className={`badge ${statusColor[e.status] || 'badge-blue'}`}>{e.status.toUpperCase()}</span></td>
-                  <td>
+                  <td style={{ color: 'var(--text2)' }}>{new Date(e.startTime).toLocaleString()}</td>
+                  <td style={{ color: 'var(--text2)' }}>{new Date(e.endTime).toLocaleString()}</td>
+                  <td><span className={`badge ${statusColor[e.status]}`}>{e.status}</span></td>
+                  <td style={{ display: 'flex', gap: 8 }}>
                     <Link to={`/results/${e._id}`} className="btn btn-sm">Results</Link>
-                    <Link to="/candidates" className="btn btn-sm" style={{ marginLeft: 6 }}>Candidates</Link>
+                    {user.role === 'admin' && e.status === 'active' && (
+                      <button className="btn btn-sm btn-red" onClick={() => handleClose(e._id)}>Close</button>
+                    )}
                   </td>
                 </tr>
               ))}
-              {elections.length === 0 && (
-                <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)', padding: 24 }}>No elections yet</td></tr>
-              )}
+              {elections.length === 0 && <tr><td colSpan={5} style={{ textAlign:'center', color:'var(--text3)', padding: 32 }}>No elections yet</td></tr>}
             </tbody>
           </table>
         </div>
@@ -90,4 +93,3 @@ export function Elections() {
     </div>
   );
 }
-export default Elections;

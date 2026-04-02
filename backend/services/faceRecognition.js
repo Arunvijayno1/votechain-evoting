@@ -1,94 +1,88 @@
 /**
- * Face Recognition Service
+ * Face Recognition Service — STRICT MODE
  * 
- * Uses face-api.js (TensorFlow.js backend) for:
- * - Generating 128-dimensional face embedding vectors
- * - Comparing embeddings using cosine similarity
- * 
- * IMPORTANT: Raw images are NEVER stored. Only the embedding vector is persisted.
- * 
- * For production: run face-api.js in a separate Node.js process or use a Python
- * microservice with DeepFace/OpenCV for better accuracy.
+ * Problem fixed: threshold raised to 0.75 (was 0.6 — too permissive, any similar face passed)
+ * Euclidean distance used alongside cosine similarity for double-check
+ * One face registration per verified email — duplicate face detection
  */
 
-const SIMILARITY_THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD) || 0.6;
+const COSINE_THRESHOLD   = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD) || 0.75;
+const EUCLIDEAN_THRESHOLD = parseFloat(process.env.FACE_EUCLIDEAN_THRESHOLD)  || 0.5;
 
-/**
- * Compute cosine similarity between two embedding vectors.
- * 
- * Cosine similarity ranges from -1 to 1:
- *   1.0  = identical face
- *   >0.6 = same person (configurable threshold)
- *   <0.6 = different person
- * 
- * @param {number[]} embeddingA - 128-d vector
- * @param {number[]} embeddingB - 128-d vector
- * @returns {number} similarity score between 0 and 1
- */
-function cosineSimilarity(embeddingA, embeddingB) {
-  if (!embeddingA || !embeddingB || embeddingA.length !== embeddingB.length) {
-    throw new Error('Invalid embeddings for comparison');
+/** Cosine similarity — higher = more similar */
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) throw new Error('Invalid embeddings');
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na  += a[i] * a[i];
+    nb  += b[i] * b[i];
   }
+  const mag = Math.sqrt(na) * Math.sqrt(nb);
+  return mag === 0 ? 0 : dot / mag;
+}
 
-  let dotProduct  = 0;
-  let normA       = 0;
-  let normB       = 0;
-
-  for (let i = 0; i < embeddingA.length; i++) {
-    dotProduct += embeddingA[i] * embeddingB[i];
-    normA      += embeddingA[i] * embeddingA[i];
-    normB      += embeddingB[i] * embeddingB[i];
-  }
-
-  const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
-  if (magnitude === 0) return 0;
-
-  return dotProduct / magnitude;
+/** Euclidean distance — lower = more similar */
+function euclideanDistance(a, b) {
+  if (!a || !b || a.length !== b.length) throw new Error('Invalid embeddings');
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += Math.pow(a[i] - b[i], 2);
+  return Math.sqrt(sum);
 }
 
 /**
- * Verify if a live face embedding matches the stored embedding.
- * 
- * @param {number[]} storedEmbedding   - from MongoDB Voter record
- * @param {number[]} capturedEmbedding - from current webcam capture
- * @returns {{ verified: boolean, similarity: number, threshold: number }}
+ * Strict face verification — BOTH cosine AND euclidean must pass
+ * This prevents different-person matches that cosine alone allows
  */
 function verifyFace(storedEmbedding, capturedEmbedding) {
-  const similarity = cosineSimilarity(storedEmbedding, capturedEmbedding);
+  const cosine    = cosineSimilarity(storedEmbedding, capturedEmbedding);
+  const euclidean = euclideanDistance(storedEmbedding, capturedEmbedding);
+
+  // BOTH checks must pass — dual-gate security
+  const cosinePass    = cosine    >= COSINE_THRESHOLD;
+  const euclideanPass = euclidean <= EUCLIDEAN_THRESHOLD;
+  const verified      = cosinePass && euclideanPass;
+
   return {
-    verified   : similarity >= SIMILARITY_THRESHOLD,
-    similarity : parseFloat(similarity.toFixed(4)),
-    threshold  : SIMILARITY_THRESHOLD,
+    verified,
+    cosine:     parseFloat(cosine.toFixed(4)),
+    euclidean:  parseFloat(euclidean.toFixed(4)),
+    similarity: parseFloat(cosine.toFixed(4)), // alias for API compat
+    threshold:  COSINE_THRESHOLD,
+    reason:     !verified
+      ? !cosinePass
+        ? `Cosine similarity ${cosine.toFixed(3)} < ${COSINE_THRESHOLD} threshold`
+        : `Euclidean distance ${euclidean.toFixed(3)} > ${EUCLIDEAN_THRESHOLD} threshold`
+      : 'Match',
   };
 }
 
 /**
- * Validate that an embedding vector is structurally correct.
- * face-api.js produces 128-dimensional Float32 arrays.
+ * Check if a new face is TOO SIMILAR to any existing registered face.
+ * Prevents creating multiple accounts with the same face.
+ * Returns the matching voter if duplicate found.
  */
+function findDuplicateFace(newEmbedding, existingVoters) {
+  for (const voter of existingVoters) {
+    if (!voter.faceEmbedding || !voter.faceRegistered) continue;
+    const cosine    = cosineSimilarity(newEmbedding, voter.faceEmbedding);
+    const euclidean = euclideanDistance(newEmbedding, voter.faceEmbedding);
+    if (cosine >= 0.82 && euclidean <= 0.35) {
+      return { duplicate: true, voter, cosine, euclidean };
+    }
+  }
+  return { duplicate: false };
+}
+
 function validateEmbedding(embedding) {
-  if (!Array.isArray(embedding)) return false;
-  if (embedding.length !== 128) return false;
+  if (!Array.isArray(embedding))                                     return false;
+  if (embedding.length !== 128)                                      return false;
   if (!embedding.every(v => typeof v === 'number' && isFinite(v))) return false;
   return true;
 }
 
-/**
- * Instructions for the frontend face-api.js pipeline:
- * 
- * 1. Load models:
- *    await faceapi.nets.ssdMobilenetv1.loadFromUri('/models')
- *    await faceapi.nets.faceLandmark68Net.loadFromUri('/models')
- *    await faceapi.nets.faceRecognitionNet.loadFromUri('/models')
- * 
- * 2. Detect and embed from video element:
- *    const detections = await faceapi
- *      .detectSingleFace(videoEl)
- *      .withFaceLandmarks()
- *      .withFaceDescriptor()
- *    const embedding = Array.from(detections.descriptor) // 128-d Float32Array → Array
- * 
- * 3. Send embedding (not image) to backend API.
- */
-
-module.exports = { cosineSimilarity, verifyFace, validateEmbedding, SIMILARITY_THRESHOLD };
+module.exports = {
+  cosineSimilarity, euclideanDistance, verifyFace,
+  findDuplicateFace, validateEmbedding,
+  COSINE_THRESHOLD, EUCLIDEAN_THRESHOLD,
+};

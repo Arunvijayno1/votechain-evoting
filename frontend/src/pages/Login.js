@@ -5,8 +5,8 @@ import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
   const { login } = useAuth();
-  const navigate = useNavigate();
-  const [form, setForm] = useState({ email: '', password: '' });
+  const navigate  = useNavigate();
+  const [form, setForm]       = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -14,30 +14,28 @@ export default function Login() {
     setLoading(true);
     try {
       const user = await login(form.email, form.password);
-      toast.success(`Welcome back, ${user.name}!`);
+      toast.success(`Welcome, ${user.name}`);
       navigate('/dashboard');
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Login failed');
-    } finally {
-      setLoading(false);
-    }
+      toast.error(err.response?.data?.message || 'Invalid credentials');
+    } finally { setLoading(false); }
   };
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
+      <div className="auth-card fade-in">
         <div className="auth-logo">
-          <div className="auth-logo-icon">🗳</div>
-          <div className="auth-title">VoteChain</div>
-          <div className="auth-sub">Secure Blockchain E-Voting</div>
+          <div className="auth-icon">⊡</div>
+          <div className="auth-title">VOTECHAIN</div>
+          <div className="auth-sub">Secure Blockchain E-Voting Platform</div>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label">Email</label>
-            <input className="form-input" type="email" required
+            <label className="form-label">Email Address</label>
+            <input className="form-input" type="email" required autoFocus
               value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
-              placeholder="you@example.com" />
+              placeholder="your@email.com" />
           </div>
           <div className="form-group">
             <label className="form-label">Password</label>
@@ -45,21 +43,22 @@ export default function Login() {
               value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
               placeholder="••••••••" />
           </div>
-          <button className="btn btn-primary" style={{ width: '100%' }} type="submit" disabled={loading}>
-            {loading ? 'Authenticating…' : 'Sign In'}
+          <button className="btn btn-gold btn-lg" style={{ width: '100%', marginTop: 4 }} type="submit" disabled={loading}>
+            {loading ? 'Authenticating…' : 'Sign In →'}
           </button>
         </form>
 
-        <div style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: 'var(--text3)' }}>
-          No account? <Link to="/register" style={{ color: 'var(--blue)' }}>Register</Link>
+        <div style={{ textAlign: 'center', marginTop: 22, fontSize: 12, color: 'var(--text3)' }}>
+          New voter?{' '}
+          <Link to="/register" style={{ color: 'var(--gold)', textDecoration: 'none', fontWeight: 600 }}>
+            Register Account
+          </Link>
         </div>
 
-        {/* Demo credentials hint */}
-        <div style={{ marginTop: 20, padding: 12, background: 'var(--bg3)', borderRadius: 8, fontSize: 10, color: 'var(--text3)' }}>
-          <b style={{ color: 'var(--text2)' }}>Demo credentials:</b><br />
-          Admin: admin@vote.com / admin123<br />
-          Voter: voter@vote.com / voter123<br />
-          Candidate: candidate@vote.com / cand123
+        <div style={{ marginTop: 24, padding: 14, background: 'var(--bg3)', borderRadius: 8, fontSize: 11, color: 'var(--text3)', border: '1px solid var(--border)' }}>
+          <div style={{ color: 'var(--gold-dim)', fontWeight: 600, marginBottom: 6 }}>Demo Credentials</div>
+          <div>Admin: admin@vote.com / admin123</div>
+          <div>Voter: voter@vote.com / voter123</div>
         </div>
       </div>
     </div>

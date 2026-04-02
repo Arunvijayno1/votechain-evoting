@@ -1,84 +1,73 @@
-const { Voter } = require('../models');
-const { verifyFace, validateEmbedding } = require('../services/faceRecognition');
+const { Voter, User } = require('../models');
+const { verifyFace, validateEmbedding, findDuplicateFace } = require('../services/faceRecognition');
 
-// ── Register Face Embedding ───────────────────────────────
-// Receives 128-d embedding vector from frontend face-api.js
-// NEVER receives or stores raw image data
+/** Register face — with duplicate-face detection across ALL voters */
 exports.registerFace = async (req, res, next) => {
   try {
     const { embedding } = req.body;
+    if (!validateEmbedding(embedding))
+      return res.status(400).json({ success: false, message: 'Invalid face embedding (must be 128-d array)' });
 
-    if (!validateEmbedding(embedding)) {
-      return res.status(400).json({
+    // Load ALL existing registered faces to check for duplicates
+    const allVoters = await Voter.find({ faceRegistered: true });
+    const currentVoter = await Voter.findOne({ userId: req.user._id });
+
+    // Exclude this user's own existing embedding from duplicate check
+    const othersVoters = allVoters.filter(v => v.userId.toString() !== req.user._id.toString());
+    const dupCheck = findDuplicateFace(embedding, othersVoters);
+
+    if (dupCheck.duplicate) {
+      return res.status(409).json({
         success: false,
-        message: 'Invalid face embedding. Must be a 128-dimensional numeric array.',
+        message: 'This face is already registered to another account. One person can only have one voter account.',
+        similarity: dupCheck.cosine,
       });
     }
 
-    const voter = await Voter.findOne({ userId: req.user._id });
-    if (!voter) {
+    if (!currentVoter)
       return res.status(404).json({ success: false, message: 'Voter profile not found' });
-    }
 
-    voter.faceEmbedding  = embedding;
-    voter.faceRegistered = true;
-    voter.registeredAt   = new Date();
-    await voter.save();
+    currentVoter.faceEmbedding  = embedding;
+    currentVoter.faceRegistered = true;
+    currentVoter.registeredAt   = new Date();
+    await currentVoter.save();
 
     res.json({ success: true, message: 'Face registered successfully' });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
 
-// ── Verify Face Embedding ─────────────────────────────────
-// Used before casting a vote — compares live embedding with stored one
+/** Verify face — strict dual-gate check */
 exports.verifyFaceEmbedding = async (req, res, next) => {
   try {
     const { embedding } = req.body;
-
-    if (!validateEmbedding(embedding)) {
+    if (!validateEmbedding(embedding))
       return res.status(400).json({ success: false, message: 'Invalid embedding format' });
-    }
 
     const voter = await Voter.findOne({ userId: req.user._id });
-    if (!voter || !voter.faceRegistered) {
-      return res.status(400).json({ success: false, message: 'Face not registered. Register first.' });
-    }
+    if (!voter?.faceRegistered)
+      return res.status(400).json({ success: false, message: 'Face not registered. Please register your face first.' });
 
     const result = verifyFace(voter.faceEmbedding, embedding);
 
     if (!result.verified) {
-      // Log failed attempt for security audit
-      console.warn(`⚠ Face verification FAILED for voter ${voter._id} — similarity: ${result.similarity}`);
+      console.warn(`⚠ FAILED face verify — user ${req.user._id} — cosine: ${result.cosine} euclidean: ${result.euclidean}`);
       return res.status(401).json({
-        success   : false,
-        verified  : false,
-        similarity: result.similarity,
-        threshold : result.threshold,
-        message   : `Face verification failed. Similarity ${result.similarity} < threshold ${result.threshold}`,
+        success: false, verified: false,
+        similarity: result.cosine,
+        euclidean: result.euclidean,
+        threshold: result.threshold,
+        message: `Face verification failed: ${result.reason}`,
       });
     }
 
-    console.log(`✅ Face verified for voter ${voter._id} — similarity: ${result.similarity}`);
-    res.json({
-      success   : true,
-      verified  : true,
-      similarity: result.similarity,
-      threshold : result.threshold,
-      message   : 'Face verified successfully',
-    });
-  } catch (err) {
-    next(err);
-  }
+    console.log(`✅ Face verified — user ${req.user._id} — cosine: ${result.cosine}`);
+    res.json({ success: true, verified: true, similarity: result.cosine, message: 'Identity verified' });
+  } catch (err) { next(err); }
 };
 
-// ── Get Voter Profile ─────────────────────────────────────
 exports.getVoterProfile = async (req, res, next) => {
   try {
     const voter = await Voter.findOne({ userId: req.user._id }).select('-faceEmbedding');
     res.json({ success: true, voter });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
